@@ -36,8 +36,10 @@ vscode-extension/node_modules/
 
 # IDE
 .idea/
-.vscode/
+/.vscode/
 *.swp
+# But keep vscode-extension's debug config
+!vscode-extension/.vscode/
 *.swo
 *~
 
