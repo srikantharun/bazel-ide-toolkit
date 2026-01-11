@@ -1,0 +1,87 @@
+{
+  "name": "bazel-ide-toolkit",
+  "displayName": "Bazel IDE Toolkit",
+  "description": "Enhanced Bazel integration with auto-refresh compile_commands.json",
+  "version": "0.1.0",
+  "publisher": "srikantharun",
+  "repository": {
+    "type": "git",
+    "url": "https://github.com/srikantharun/bazel-ide-toolkit"
+  },
+  "engines": {
+    "vscode": "^1.85.0"
+  },
+  "categories": [
+    "Programming Languages",
+    "Other"
+  ],
+  "keywords": [
+    "bazel",
+    "build",
+    "compile_commands",
+    "clangd",
+    "c++",
+    "cpp"
+  ],
+  "activationEvents": [
+    "workspaceContains:WORKSPACE",
+    "workspaceContains:WORKSPACE.bazel",
+    "workspaceContains:MODULE.bazel"
+  ],
+  "main": "./out/extension.js",
+  "contributes": {
+    "commands": [
+      {
+        "command": "bazel-ide-toolkit.refresh",
+        "title": "Bazel: Refresh compile_commands.json"
+      },
+      {
+        "command": "bazel-ide-toolkit.toggleAutoRefresh",
+        "title": "Bazel: Toggle Auto-Refresh"
+      },
+      {
+        "command": "bazel-ide-toolkit.selectPlatform",
+        "title": "Bazel: Select Platform"
+      }
+    ],
+    "configuration": {
+      "title": "Bazel IDE Toolkit",
+      "properties": {
+        "bazelIdeToolkit.autoRefresh": {
+          "type": "boolean",
+          "default": true,
+          "description": "Automatically refresh compile_commands.json when BUILD files change"
+        },
+        "bazelIdeToolkit.debounceMs": {
+          "type": "number",
+          "default": 2000,
+          "description": "Debounce delay in milliseconds before refreshing"
+        },
+        "bazelIdeToolkit.targets": {
+          "type": "string",
+          "default": "//...",
+          "description": "Bazel targets to include in compile_commands.json"
+        },
+        "bazelIdeToolkit.showStatusBar": {
+          "type": "boolean",
+          "default": true,
+          "description": "Show Bazel status in the status bar"
+        }
+      }
+    }
+  },
+  "scripts": {
+    "vscode:prepublish": "npm run compile",
+    "compile": "tsc -p ./",
+    "watch": "tsc -watch -p ./",
+    "lint": "eslint src --ext ts"
+  },
+  "devDependencies": {
+    "@types/node": "^20.0.0",
+    "@types/vscode": "^1.85.0",
+    "@typescript-eslint/eslint-plugin": "^6.0.0",
+    "@typescript-eslint/parser": "^6.0.0",
+    "eslint": "^8.0.0",
+    "typescript": "^5.0.0"
+  }
+}

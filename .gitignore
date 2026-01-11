@@ -1,0 +1,61 @@
+# Python
+__pycache__/
+*.py[cod]
+*$py.class
+*.so
+.Python
+build/
+develop-eggs/
+dist/
+downloads/
+eggs/
+.eggs/
+lib/
+lib64/
+parts/
+sdist/
+var/
+wheels/
+*.egg-info/
+.installed.cfg
+*.egg
+.venv/
+venv/
+ENV/
+
+# Node/TypeScript
+node_modules/
+out/
+*.js.map
+.npm
+
+# VS Code extension
+vscode-extension/out/
+vscode-extension/node_modules/
+*.vsix
+
+# IDE
+.idea/
+.vscode/
+*.swp
+*.swo
+*~
+
+# Bazel
+bazel-*
+.bazelrc.user
+
+# OS
+.DS_Store
+Thumbs.db
+
+# Test/Coverage
+.coverage
+.pytest_cache/
+htmlcov/
+.tox/
+.nox/
+
+# Distribution
+*.tar.gz
+*.whl
