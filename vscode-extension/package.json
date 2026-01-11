@@ -1,8 +1,8 @@
 {
   "name": "bazel-ide-toolkit",
   "displayName": "Bazel IDE Toolkit",
-  "description": "Enhanced Bazel integration with auto-refresh compile_commands.json, build/run/test commands",
-  "version": "0.2.0",
+  "description": "Enhanced Bazel integration: auto-refresh compile_commands, build/run/test, CodeLens, Buildifier",
+  "version": "0.3.0",
   "publisher": "srikantharun",
   "license": "Apache-2.0",
   "icon": "images/icon.png",
@@ -19,16 +19,19 @@
   },
   "categories": [
     "Programming Languages",
+    "Formatters",
     "Other"
   ],
   "keywords": [
     "bazel",
     "bzlmod",
+    "starlark",
     "build",
     "compile_commands",
     "clangd",
     "c++",
-    "cpp"
+    "cpp",
+    "buildifier"
   ],
   "activationEvents": [
     "workspaceContains:MODULE.bazel",
@@ -73,6 +76,30 @@
       {
         "command": "bazel-ide-toolkit.testFile",
         "title": "Bazel: Test Current File"
+      },
+      {
+        "command": "bazel-ide-toolkit.formatBuildFile",
+        "title": "Bazel: Format BUILD File (Buildifier)"
+      },
+      {
+        "command": "bazel-ide-toolkit.showDeps",
+        "title": "Bazel: Show Dependencies"
+      },
+      {
+        "command": "bazel-ide-toolkit.showReverseDeps",
+        "title": "Bazel: Show Reverse Dependencies (What depends on this?)"
+      },
+      {
+        "command": "bazel-ide-toolkit.codelens.build",
+        "title": "Build"
+      },
+      {
+        "command": "bazel-ide-toolkit.codelens.test",
+        "title": "Test"
+      },
+      {
+        "command": "bazel-ide-toolkit.codelens.run",
+        "title": "Run"
       }
     ],
     "keybindings": [
@@ -87,6 +114,27 @@
         "key": "ctrl+shift+t",
         "mac": "cmd+shift+t",
         "when": "editorTextFocus"
+      },
+      {
+        "command": "bazel-ide-toolkit.formatBuildFile",
+        "key": "alt+shift+f",
+        "when": "editorTextFocus && resourceFilename =~ /BUILD(\\.bazel)?$|.*\\.bzl$/"
+      }
+    ],
+    "languages": [
+      {
+        "id": "starlark",
+        "aliases": ["Starlark", "Bazel", "BUILD"],
+        "extensions": [".bzl", ".bazel"],
+        "filenames": ["BUILD", "BUILD.bazel", "WORKSPACE", "WORKSPACE.bazel", "MODULE.bazel"],
+        "configuration": "./language-configuration.json"
+      }
+    ],
+    "grammars": [
+      {
+        "language": "starlark",
+        "scopeName": "source.starlark",
+        "path": "./syntaxes/starlark.tmLanguage.json"
       }
     ],
     "configuration": {
@@ -126,6 +174,21 @@
           "type": "array",
           "default": [],
           "description": "Additional flags to pass to bazel run"
+        },
+        "bazelIdeToolkit.enableCodeLens": {
+          "type": "boolean",
+          "default": true,
+          "description": "Show Build/Test/Run CodeLens above targets in BUILD files"
+        },
+        "bazelIdeToolkit.buildifierOnSave": {
+          "type": "boolean",
+          "default": true,
+          "description": "Auto-format BUILD files with Buildifier on save"
+        },
+        "bazelIdeToolkit.buildifierPath": {
+          "type": "string",
+          "default": "buildifier",
+          "description": "Path to buildifier executable"
         }
       }
     }

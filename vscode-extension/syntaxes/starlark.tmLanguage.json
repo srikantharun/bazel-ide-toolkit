@@ -1,0 +1,172 @@
+{
+  "$schema": "https://raw.githubusercontent.com/martinring/tmlanguage/master/tmlanguage.json",
+  "name": "Starlark",
+  "scopeName": "source.starlark",
+  "patterns": [
+    { "include": "#comments" },
+    { "include": "#strings" },
+    { "include": "#keywords" },
+    { "include": "#builtin-rules" },
+    { "include": "#builtin-functions" },
+    { "include": "#constants" },
+    { "include": "#function-definitions" },
+    { "include": "#function-calls" }
+  ],
+  "repository": {
+    "comments": {
+      "patterns": [
+        {
+          "name": "comment.line.number-sign.starlark",
+          "match": "#.*$"
+        }
+      ]
+    },
+    "strings": {
+      "patterns": [
+        {
+          "name": "string.quoted.triple.starlark",
+          "begin": "\"\"\"",
+          "end": "\"\"\""
+        },
+        {
+          "name": "string.quoted.triple.starlark",
+          "begin": "'''",
+          "end": "'''"
+        },
+        {
+          "name": "string.quoted.double.starlark",
+          "begin": "\"",
+          "end": "\"",
+          "patterns": [
+            {
+              "name": "constant.character.escape.starlark",
+              "match": "\\\\."
+            }
+          ]
+        },
+        {
+          "name": "string.quoted.single.starlark",
+          "begin": "'",
+          "end": "'",
+          "patterns": [
+            {
+              "name": "constant.character.escape.starlark",
+              "match": "\\\\."
+            }
+          ]
+        }
+      ]
+    },
+    "keywords": {
+      "patterns": [
+        {
+          "name": "keyword.control.starlark",
+          "match": "\\b(if|elif|else|for|in|break|continue|pass|return|and|or|not)\\b"
+        },
+        {
+          "name": "keyword.other.starlark",
+          "match": "\\b(def|load|lambda)\\b"
+        },
+        {
+          "name": "storage.type.starlark",
+          "match": "\\b(True|False|None)\\b"
+        }
+      ]
+    },
+    "builtin-rules": {
+      "patterns": [
+        {
+          "name": "entity.name.function.rule.starlark",
+          "match": "\\b(cc_library|cc_binary|cc_test|cc_import|cc_shared_library)\\b"
+        },
+        {
+          "name": "entity.name.function.rule.starlark",
+          "match": "\\b(py_library|py_binary|py_test|py_runtime)\\b"
+        },
+        {
+          "name": "entity.name.function.rule.starlark",
+          "match": "\\b(java_library|java_binary|java_test|java_import)\\b"
+        },
+        {
+          "name": "entity.name.function.rule.starlark",
+          "match": "\\b(go_library|go_binary|go_test)\\b"
+        },
+        {
+          "name": "entity.name.function.rule.starlark",
+          "match": "\\b(rust_library|rust_binary|rust_test)\\b"
+        },
+        {
+          "name": "entity.name.function.rule.starlark",
+          "match": "\\b(proto_library|cc_proto_library|py_proto_library)\\b"
+        },
+        {
+          "name": "entity.name.function.rule.starlark",
+          "match": "\\b(genrule|sh_binary|sh_test|sh_library)\\b"
+        },
+        {
+          "name": "entity.name.function.rule.starlark",
+          "match": "\\b(filegroup|exports_files|alias|test_suite)\\b"
+        },
+        {
+          "name": "entity.name.function.rule.starlark",
+          "match": "\\b(config_setting|constraint_setting|constraint_value|platform)\\b"
+        },
+        {
+          "name": "entity.name.function.rule.starlark",
+          "match": "\\b(toolchain|toolchain_type)\\b"
+        }
+      ]
+    },
+    "builtin-functions": {
+      "patterns": [
+        {
+          "name": "support.function.builtin.starlark",
+          "match": "\\b(select|glob|package|licenses|exports_files|load)\\b"
+        },
+        {
+          "name": "support.function.builtin.starlark",
+          "match": "\\b(len|str|int|bool|list|dict|tuple|range|enumerate|zip|sorted|reversed|hasattr|getattr|type|repr|hash|min|max|all|any|print|fail)\\b"
+        },
+        {
+          "name": "support.function.builtin.starlark",
+          "match": "\\b(bazel_dep|module|use_extension|use_repo|register_toolchains|git_override|archive_override|single_version_override)\\b"
+        }
+      ]
+    },
+    "constants": {
+      "patterns": [
+        {
+          "name": "constant.numeric.starlark",
+          "match": "\\b[0-9]+\\b"
+        },
+        {
+          "name": "constant.language.starlark",
+          "match": "\\b(True|False|None)\\b"
+        }
+      ]
+    },
+    "function-definitions": {
+      "patterns": [
+        {
+          "name": "meta.function.starlark",
+          "match": "\\b(def)\\s+([a-zA-Z_][a-zA-Z0-9_]*)\\s*\\(",
+          "captures": {
+            "1": { "name": "keyword.other.starlark" },
+            "2": { "name": "entity.name.function.starlark" }
+          }
+        }
+      ]
+    },
+    "function-calls": {
+      "patterns": [
+        {
+          "name": "meta.function-call.starlark",
+          "match": "\\b([a-zA-Z_][a-zA-Z0-9_]*)\\s*\\(",
+          "captures": {
+            "1": { "name": "entity.name.function.starlark" }
+          }
+        }
+      ]
+    }
+  }
+}

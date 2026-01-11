@@ -41,10 +41,63 @@ export function activate(context: vscode.ExtensionContext) {
         vscode.commands.registerCommand('bazel-ide-toolkit.runTarget', runTarget),
         vscode.commands.registerCommand('bazel-ide-toolkit.buildFile', buildCurrentFile),
         vscode.commands.registerCommand('bazel-ide-toolkit.testFile', testCurrentFile),
+        vscode.commands.registerCommand('bazel-ide-toolkit.formatBuildFile', formatBuildFile),
+        vscode.commands.registerCommand('bazel-ide-toolkit.showDeps', showDependencies),
+        vscode.commands.registerCommand('bazel-ide-toolkit.showReverseDeps', showReverseDependencies),
+        vscode.commands.registerCommand('bazel-ide-toolkit.codelens.build', (target: string) => executeBazelCommand('build', target)),
+        vscode.commands.registerCommand('bazel-ide-toolkit.codelens.test', (target: string) => executeBazelCommand('test', target)),
+        vscode.commands.registerCommand('bazel-ide-toolkit.codelens.run', (target: string) => executeBazelCommand('run', target)),
+    );
+
+    // Register CodeLens provider for BUILD files
+    const config = vscode.workspace.getConfiguration('bazelIdeToolkit');
+    if (config.get<boolean>('enableCodeLens')) {
+        const codeLensProvider = new BazelCodeLensProvider();
+        context.subscriptions.push(
+            vscode.languages.registerCodeLensProvider(
+                [
+                    { pattern: '**/BUILD' },
+                    { pattern: '**/BUILD.bazel' },
+                    { language: 'starlark' }
+                ],
+                codeLensProvider
+            )
+        );
+    }
+
+    // Register document formatting provider for Buildifier
+    context.subscriptions.push(
+        vscode.languages.registerDocumentFormattingEditProvider(
+            [
+                { pattern: '**/BUILD' },
+                { pattern: '**/BUILD.bazel' },
+                { pattern: '**/*.bzl' },
+                { language: 'starlark' }
+            ],
+            new BuildifierFormattingProvider()
+        )
+    );
+
+    // Auto-format on save if enabled
+    context.subscriptions.push(
+        vscode.workspace.onWillSaveTextDocument(async (event) => {
+            const config = vscode.workspace.getConfiguration('bazelIdeToolkit');
+            if (!config.get<boolean>('buildifierOnSave')) {
+                return;
+            }
+
+            const doc = event.document;
+            const fileName = path.basename(doc.fileName);
+            if (fileName === 'BUILD' || fileName === 'BUILD.bazel' || doc.fileName.endsWith('.bzl')) {
+                const edit = await formatWithBuildifier(doc);
+                if (edit) {
+                    event.waitUntil(Promise.resolve([edit]));
+                }
+            }
+        })
     );
 
     // Set up file watchers if auto-refresh is enabled
-    const config = vscode.workspace.getConfiguration('bazelIdeToolkit');
     if (config.get<boolean>('autoRefresh')) {
         setupFileWatchers(context);
     }
@@ -64,13 +117,260 @@ export function activate(context: vscode.ExtensionContext) {
     console.log('Bazel IDE Toolkit activated');
 }
 
+// ============ CodeLens Provider ============
+
+class BazelCodeLensProvider implements vscode.CodeLensProvider {
+    provideCodeLenses(document: vscode.TextDocument): vscode.CodeLens[] {
+        const codeLenses: vscode.CodeLens[] = [];
+        const text = document.getText();
+        const lines = text.split('\n');
+
+        // Regex patterns for different rule types
+        const rulePatterns = [
+            // Binary rules (can build and run)
+            { pattern: /^(cc_binary|py_binary|go_binary|rust_binary|java_binary|sh_binary)\s*\(/, canRun: true, canTest: false },
+            // Test rules (can build and test)
+            { pattern: /^(cc_test|py_test|go_test|rust_test|java_test|sh_test)\s*\(/, canRun: false, canTest: true },
+            // Library rules (can only build)
+            { pattern: /^(cc_library|py_library|go_library|rust_library|java_library|proto_library|filegroup)\s*\(/, canRun: false, canTest: false },
+        ];
+
+        const workspaceRoot = getWorkspaceRoot();
+        if (!workspaceRoot) {
+            return codeLenses;
+        }
+
+        // Get package path from file
+        const relativePath = path.relative(workspaceRoot, document.fileName);
+        const packagePath = path.dirname(relativePath);
+
+        for (let lineNum = 0; lineNum < lines.length; lineNum++) {
+            const line = lines[lineNum];
+
+            for (const { pattern, canRun, canTest } of rulePatterns) {
+                if (pattern.test(line.trim())) {
+                    // Find the name attribute
+                    const targetName = findTargetName(lines, lineNum);
+                    if (targetName) {
+                        const target = `//${packagePath}:${targetName}`;
+                        const range = new vscode.Range(lineNum, 0, lineNum, line.length);
+
+                        // Always add Build
+                        codeLenses.push(new vscode.CodeLens(range, {
+                            title: '▶ Build',
+                            command: 'bazel-ide-toolkit.codelens.build',
+                            arguments: [target]
+                        }));
+
+                        // Add Test for test rules
+                        if (canTest) {
+                            codeLenses.push(new vscode.CodeLens(range, {
+                                title: '🧪 Test',
+                                command: 'bazel-ide-toolkit.codelens.test',
+                                arguments: [target]
+                            }));
+                        }
+
+                        // Add Run for binary rules
+                        if (canRun) {
+                            codeLenses.push(new vscode.CodeLens(range, {
+                                title: '🚀 Run',
+                                command: 'bazel-ide-toolkit.codelens.run',
+                                arguments: [target]
+                            }));
+                        }
+                    }
+                    break;
+                }
+            }
+        }
+
+        return codeLenses;
+    }
+}
+
+function findTargetName(lines: string[], startLine: number): string | undefined {
+    // Look for name = "..." in the next few lines
+    for (let i = startLine; i < Math.min(startLine + 20, lines.length); i++) {
+        const match = lines[i].match(/name\s*=\s*["']([^"']+)["']/);
+        if (match) {
+            return match[1];
+        }
+        // Stop if we hit another rule or end of current rule
+        if (i > startLine && lines[i].trim().match(/^\w+\s*\(/)) {
+            break;
+        }
+    }
+    return undefined;
+}
+
+// ============ Buildifier Formatting ============
+
+class BuildifierFormattingProvider implements vscode.DocumentFormattingEditProvider {
+    async provideDocumentFormattingEdits(document: vscode.TextDocument): Promise<vscode.TextEdit[]> {
+        const edit = await formatWithBuildifier(document);
+        return edit ? [edit] : [];
+    }
+}
+
+async function formatWithBuildifier(document: vscode.TextDocument): Promise<vscode.TextEdit | undefined> {
+    const config = vscode.workspace.getConfiguration('bazelIdeToolkit');
+    const buildifierPath = config.get<string>('buildifierPath') || 'buildifier';
+
+    try {
+        const result = await runCommandWithInput(
+            buildifierPath,
+            document.getText(),
+            path.dirname(document.fileName)
+        );
+
+        if (result.exitCode === 0 && result.stdout !== document.getText()) {
+            const fullRange = new vscode.Range(
+                document.positionAt(0),
+                document.positionAt(document.getText().length)
+            );
+            return vscode.TextEdit.replace(fullRange, result.stdout);
+        }
+    } catch (error: any) {
+        // Buildifier not installed - silently fail
+        console.log('Buildifier not available:', error.message);
+    }
+
+    return undefined;
+}
+
+async function formatBuildFile() {
+    const editor = vscode.window.activeTextEditor;
+    if (!editor) {
+        vscode.window.showWarningMessage('No active editor');
+        return;
+    }
+
+    const edit = await formatWithBuildifier(editor.document);
+    if (edit) {
+        const workspaceEdit = new vscode.WorkspaceEdit();
+        workspaceEdit.set(editor.document.uri, [edit]);
+        await vscode.workspace.applyEdit(workspaceEdit);
+        vscode.window.showInformationMessage('Formatted with Buildifier');
+    } else {
+        vscode.window.showInformationMessage('No formatting changes needed');
+    }
+}
+
+// ============ Dependency Visualization ============
+
+async function showDependencies() {
+    const target = await promptForTarget('query deps');
+    if (!target) {
+        return;
+    }
+
+    const workspaceRoot = getWorkspaceRoot();
+    if (!workspaceRoot) {
+        return;
+    }
+
+    outputChannel.clear();
+    outputChannel.show(true);
+    outputChannel.appendLine(`$ bazel query "deps(${target})" --output=graph`);
+    outputChannel.appendLine('');
+
+    updateStatusBar('$(sync~spin) Bazel', 'Querying dependencies...');
+
+    try {
+        const result = await runCommand(
+            `bazel query "deps(${target}, 1)" --output=label 2>/dev/null`,
+            workspaceRoot
+        );
+
+        if (result.exitCode === 0) {
+            const deps = result.stdout.trim().split('\n').filter(d => d.startsWith('//'));
+
+            outputChannel.appendLine(`Dependencies of ${target}:`);
+            outputChannel.appendLine('');
+
+            if (deps.length === 0) {
+                outputChannel.appendLine('  (no dependencies)');
+            } else {
+                deps.forEach(dep => {
+                    outputChannel.appendLine(`  → ${dep}`);
+                });
+            }
+
+            outputChannel.appendLine('');
+            outputChannel.appendLine(`Total: ${deps.length} direct dependencies`);
+
+            updateStatusBar('$(check) Bazel', 'Query complete');
+        } else {
+            outputChannel.appendLine('Query failed');
+            updateStatusBar('$(error) Bazel', 'Query failed');
+        }
+    } catch (error: any) {
+        outputChannel.appendLine(`Error: ${error.message}`);
+        updateStatusBar('$(error) Bazel', 'Query failed');
+    }
+}
+
+async function showReverseDependencies() {
+    const target = await promptForTarget('query rdeps');
+    if (!target) {
+        return;
+    }
+
+    const workspaceRoot = getWorkspaceRoot();
+    if (!workspaceRoot) {
+        return;
+    }
+
+    outputChannel.clear();
+    outputChannel.show(true);
+    outputChannel.appendLine(`$ bazel query "rdeps(//..., ${target}, 1)"`);
+    outputChannel.appendLine('');
+
+    updateStatusBar('$(sync~spin) Bazel', 'Querying reverse dependencies...');
+
+    try {
+        const result = await runCommand(
+            `bazel query "rdeps(//..., ${target}, 1)" --output=label 2>/dev/null | head -50`,
+            workspaceRoot
+        );
+
+        if (result.exitCode === 0) {
+            const rdeps = result.stdout.trim().split('\n').filter(d => d.startsWith('//') && d !== target);
+
+            outputChannel.appendLine(`What depends on ${target}:`);
+            outputChannel.appendLine('');
+
+            if (rdeps.length === 0) {
+                outputChannel.appendLine('  (nothing depends on this target)');
+            } else {
+                rdeps.forEach(dep => {
+                    outputChannel.appendLine(`  ← ${dep}`);
+                });
+            }
+
+            outputChannel.appendLine('');
+            outputChannel.appendLine(`Total: ${rdeps.length} reverse dependencies (showing up to 50)`);
+
+            updateStatusBar('$(check) Bazel', 'Query complete');
+        } else {
+            outputChannel.appendLine('Query failed');
+            updateStatusBar('$(error) Bazel', 'Query failed');
+        }
+    } catch (error: any) {
+        outputChannel.appendLine(`Error: ${error.message}`);
+        updateStatusBar('$(error) Bazel', 'Query failed');
+    }
+}
+
+// ============ File Watchers ============
+
 function setupFileWatchers(context: vscode.ExtensionContext) {
     const workspaceRoot = getWorkspaceRoot();
     if (!workspaceRoot) {
         return;
     }
 
-    // Create file watchers for each pattern
     for (const pattern of WATCH_PATTERNS) {
         const watcher = vscode.workspace.createFileSystemWatcher(
             new vscode.RelativePattern(workspaceRoot, pattern)
@@ -117,17 +417,14 @@ async function refreshCompileCommands() {
     updateStatusBar('$(sync~spin) Bazel', 'Refreshing compile_commands.json...');
 
     try {
-        // Try hedron extractor first
         let command = 'bazel run @hedron_compile_commands//:refresh_all';
 
-        // Check if hedron is available
         const checkResult = await runCommand(
             'bazel query @hedron_compile_commands//:refresh_all',
             workspaceRoot
         );
 
         if (checkResult.exitCode !== 0) {
-            // Fall back to local target
             const localCheck = await runCommand(
                 'bazel query //:refresh_compile_commands',
                 workspaceRoot
@@ -162,27 +459,24 @@ async function toggleAutoRefresh() {
     const config = vscode.workspace.getConfiguration('bazelIdeToolkit');
     const current = config.get<boolean>('autoRefresh');
     await config.update('autoRefresh', !current, vscode.ConfigurationTarget.Workspace);
-
-    const status = !current ? 'enabled' : 'disabled';
-    vscode.window.showInformationMessage(`Auto-refresh ${status}`);
+    vscode.window.showInformationMessage(`Auto-refresh ${!current ? 'enabled' : 'disabled'}`);
 }
 
 async function selectPlatform() {
     const platforms = [
-        { label: '$(device-desktop) Linux x86_64', value: 'linux-x86_64', flag: '--platforms=@platforms//os:linux' },
-        { label: '$(device-desktop) macOS ARM64', value: 'macos-arm64', flag: '--platforms=@platforms//os:macos' },
-        { label: '$(device-desktop) Windows x86_64', value: 'windows-x86_64', flag: '--platforms=@platforms//os:windows' },
-        { label: '$(device-mobile) Android ARM64', value: 'android-arm64', flag: '--platforms=@platforms//os:android' },
-        { label: '$(device-mobile) iOS ARM64', value: 'ios-arm64', flag: '--platforms=@platforms//os:ios' },
+        { label: '$(device-desktop) Linux x86_64', value: 'linux-x86_64' },
+        { label: '$(device-desktop) macOS ARM64', value: 'macos-arm64' },
+        { label: '$(device-desktop) Windows x86_64', value: 'windows-x86_64' },
+        { label: '$(device-mobile) Android ARM64', value: 'android-arm64' },
+        { label: '$(device-mobile) iOS ARM64', value: 'ios-arm64' },
     ];
 
     const selected = await vscode.window.showQuickPick(platforms, {
-        placeHolder: 'Select target platform for compile_commands.json',
+        placeHolder: 'Select target platform',
     });
 
     if (selected) {
         vscode.window.showInformationMessage(`Selected platform: ${selected.label}`);
-        // Trigger refresh with new platform
         refreshCompileCommands();
     }
 }
@@ -222,7 +516,6 @@ async function buildCurrentFile() {
 async function testCurrentFile() {
     const target = await findTargetForCurrentFile();
     if (target) {
-        // Try to find associated test target
         const testTarget = target.replace(/:([^:]+)$/, ':$1_test');
         await executeBazelCommand('test', testTarget);
     } else {
@@ -237,7 +530,6 @@ async function promptForTarget(action: string): Promise<string | undefined> {
         return undefined;
     }
 
-    // Get recent targets from history or query
     const recentTargets = await getRecentTargets(workspaceRoot, action);
 
     const items: vscode.QuickPickItem[] = recentTargets.map(t => ({
@@ -245,7 +537,6 @@ async function promptForTarget(action: string): Promise<string | undefined> {
         description: action
     }));
 
-    // Add option to enter custom target
     items.push({
         label: '$(edit) Enter target manually...',
         description: 'Type a Bazel target label'
@@ -253,7 +544,6 @@ async function promptForTarget(action: string): Promise<string | undefined> {
 
     const selected = await vscode.window.showQuickPick(items, {
         placeHolder: `Select target to ${action}`,
-        matchOnDescription: true
     });
 
     if (!selected) {
@@ -271,7 +561,6 @@ async function promptForTarget(action: string): Promise<string | undefined> {
 }
 
 async function getRecentTargets(workspaceRoot: string, action: string): Promise<string[]> {
-    // Query for targets based on action type
     let query = '';
     switch (action) {
         case 'test':
@@ -293,7 +582,7 @@ async function getRecentTargets(workspaceRoot: string, action: string): Promise<
             return result.stdout.trim().split('\n').filter(t => t.startsWith('//'));
         }
     } catch {
-        // Ignore errors, return empty list
+        // Ignore
     }
 
     return ['//...'];
@@ -313,7 +602,6 @@ async function findTargetForCurrentFile(): Promise<string | undefined> {
     const filePath = editor.document.uri.fsPath;
     const relativePath = path.relative(workspaceRoot, filePath);
 
-    // Use bazel query to find target that owns this file
     try {
         const result = await runCommand(
             `bazel query "kind(rule, rdeps(//..., ${relativePath}, 1))" --output=label 2>/dev/null | head -1`,
@@ -323,10 +611,9 @@ async function findTargetForCurrentFile(): Promise<string | undefined> {
             return result.stdout.trim();
         }
     } catch {
-        // Fall back to guessing from path
+        // Fall through
     }
 
-    // Fallback: construct target from file path
     const dir = path.dirname(relativePath);
     const basename = path.basename(relativePath, path.extname(relativePath));
     return `//${dir}:${basename}`;
@@ -419,6 +706,42 @@ function runCommand(command: string, cwd: string): Promise<CommandResult> {
                 stderr: stderr || '',
             });
         });
+    });
+}
+
+function runCommandWithInput(command: string, input: string, cwd: string): Promise<CommandResult> {
+    return new Promise((resolve) => {
+        const proc = cp.spawn(command, [], { cwd, shell: true });
+
+        let stdout = '';
+        let stderr = '';
+
+        proc.stdout.on('data', (data) => {
+            stdout += data.toString();
+        });
+
+        proc.stderr.on('data', (data) => {
+            stderr += data.toString();
+        });
+
+        proc.on('close', (code) => {
+            resolve({
+                exitCode: code || 0,
+                stdout,
+                stderr,
+            });
+        });
+
+        proc.on('error', (err) => {
+            resolve({
+                exitCode: 1,
+                stdout,
+                stderr: err.message,
+            });
+        });
+
+        proc.stdin.write(input);
+        proc.stdin.end();
     });
 }
 
