@@ -5,9 +5,10 @@
   "version": "0.1.0",
   "publisher": "srikantharun",
   "license": "Apache-2.0",
+  "icon": "images/icon.png",
   "repository": {
     "type": "git",
-    "url": "https://github.com/srikantharun/bazel-ide-toolkit"
+    "url": "https://github.com/srikantharun/bazel-ide-toolkit.git"
   },
   "homepage": "https://github.com/srikantharun/bazel-ide-toolkit",
   "bugs": {
