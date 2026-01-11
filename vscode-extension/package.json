@@ -1,8 +1,8 @@
 {
   "name": "bazel-ide-toolkit",
   "displayName": "Bazel IDE Toolkit",
-  "description": "Enhanced Bazel integration with auto-refresh compile_commands.json",
-  "version": "0.1.0",
+  "description": "Enhanced Bazel integration with auto-refresh compile_commands.json, build/run/test commands",
+  "version": "0.2.0",
   "publisher": "srikantharun",
   "license": "Apache-2.0",
   "icon": "images/icon.png",
@@ -23,6 +23,7 @@
   ],
   "keywords": [
     "bazel",
+    "bzlmod",
     "build",
     "compile_commands",
     "clangd",
@@ -30,16 +31,17 @@
     "cpp"
   ],
   "activationEvents": [
+    "workspaceContains:MODULE.bazel",
     "workspaceContains:WORKSPACE",
-    "workspaceContains:WORKSPACE.bazel",
-    "workspaceContains:MODULE.bazel"
+    "workspaceContains:WORKSPACE.bazel"
   ],
   "main": "./out/extension.js",
   "contributes": {
     "commands": [
       {
         "command": "bazel-ide-toolkit.refresh",
-        "title": "Bazel: Refresh compile_commands.json"
+        "title": "Bazel: Refresh compile_commands.json",
+        "icon": "$(refresh)"
       },
       {
         "command": "bazel-ide-toolkit.toggleAutoRefresh",
@@ -48,6 +50,43 @@
       {
         "command": "bazel-ide-toolkit.selectPlatform",
         "title": "Bazel: Select Platform"
+      },
+      {
+        "command": "bazel-ide-toolkit.buildTarget",
+        "title": "Bazel: Build Target",
+        "icon": "$(tools)"
+      },
+      {
+        "command": "bazel-ide-toolkit.testTarget",
+        "title": "Bazel: Test Target",
+        "icon": "$(beaker)"
+      },
+      {
+        "command": "bazel-ide-toolkit.runTarget",
+        "title": "Bazel: Run Target",
+        "icon": "$(play)"
+      },
+      {
+        "command": "bazel-ide-toolkit.buildFile",
+        "title": "Bazel: Build Current File's Target"
+      },
+      {
+        "command": "bazel-ide-toolkit.testFile",
+        "title": "Bazel: Test Current File"
+      }
+    ],
+    "keybindings": [
+      {
+        "command": "bazel-ide-toolkit.buildFile",
+        "key": "ctrl+shift+b",
+        "mac": "cmd+shift+b",
+        "when": "editorTextFocus"
+      },
+      {
+        "command": "bazel-ide-toolkit.testFile",
+        "key": "ctrl+shift+t",
+        "mac": "cmd+shift+t",
+        "when": "editorTextFocus"
       }
     ],
     "configuration": {
@@ -72,6 +111,21 @@
           "type": "boolean",
           "default": true,
           "description": "Show Bazel status in the status bar"
+        },
+        "bazelIdeToolkit.buildFlags": {
+          "type": "array",
+          "default": [],
+          "description": "Additional flags to pass to bazel build"
+        },
+        "bazelIdeToolkit.testFlags": {
+          "type": "array",
+          "default": [],
+          "description": "Additional flags to pass to bazel test"
+        },
+        "bazelIdeToolkit.runFlags": {
+          "type": "array",
+          "default": [],
+          "description": "Additional flags to pass to bazel run"
         }
       }
     }

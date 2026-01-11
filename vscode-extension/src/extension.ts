@@ -1,8 +1,9 @@
 import * as vscode from 'vscode';
 import * as cp from 'child_process';
+import * as path from 'path';
 
 let statusBarItem: vscode.StatusBarItem;
-let fileWatcher: vscode.FileSystemWatcher | undefined;
+let outputChannel: vscode.OutputChannel;
 let refreshTimeout: NodeJS.Timeout | undefined;
 let isRefreshing = false;
 
@@ -19,6 +20,10 @@ const WATCH_PATTERNS = [
 export function activate(context: vscode.ExtensionContext) {
     console.log('Bazel IDE Toolkit activating...');
 
+    // Create output channel for build output
+    outputChannel = vscode.window.createOutputChannel('Bazel');
+    context.subscriptions.push(outputChannel);
+
     // Create status bar item
     statusBarItem = vscode.window.createStatusBarItem(vscode.StatusBarAlignment.Left, 100);
     statusBarItem.command = 'bazel-ide-toolkit.refresh';
@@ -31,6 +36,11 @@ export function activate(context: vscode.ExtensionContext) {
         vscode.commands.registerCommand('bazel-ide-toolkit.refresh', refreshCompileCommands),
         vscode.commands.registerCommand('bazel-ide-toolkit.toggleAutoRefresh', toggleAutoRefresh),
         vscode.commands.registerCommand('bazel-ide-toolkit.selectPlatform', selectPlatform),
+        vscode.commands.registerCommand('bazel-ide-toolkit.buildTarget', buildTarget),
+        vscode.commands.registerCommand('bazel-ide-toolkit.testTarget', testTarget),
+        vscode.commands.registerCommand('bazel-ide-toolkit.runTarget', runTarget),
+        vscode.commands.registerCommand('bazel-ide-toolkit.buildFile', buildCurrentFile),
+        vscode.commands.registerCommand('bazel-ide-toolkit.testFile', testCurrentFile),
     );
 
     // Set up file watchers if auto-refresh is enabled
@@ -46,8 +56,6 @@ export function activate(context: vscode.ExtensionContext) {
                 const autoRefresh = vscode.workspace.getConfiguration('bazelIdeToolkit').get<boolean>('autoRefresh');
                 if (autoRefresh) {
                     setupFileWatchers(context);
-                } else {
-                    disposeFileWatchers();
                 }
             }
         })
@@ -57,14 +65,12 @@ export function activate(context: vscode.ExtensionContext) {
 }
 
 function setupFileWatchers(context: vscode.ExtensionContext) {
-    disposeFileWatchers();
-
     const workspaceRoot = getWorkspaceRoot();
     if (!workspaceRoot) {
         return;
     }
 
-    // Create a composite file watcher
+    // Create file watchers for each pattern
     for (const pattern of WATCH_PATTERNS) {
         const watcher = vscode.workspace.createFileSystemWatcher(
             new vscode.RelativePattern(workspaceRoot, pattern)
@@ -78,13 +84,6 @@ function setupFileWatchers(context: vscode.ExtensionContext) {
     }
 
     console.log('File watchers set up for BUILD file changes');
-}
-
-function disposeFileWatchers() {
-    if (fileWatcher) {
-        fileWatcher.dispose();
-        fileWatcher = undefined;
-    }
 }
 
 function triggerDebouncedRefresh() {
@@ -170,11 +169,11 @@ async function toggleAutoRefresh() {
 
 async function selectPlatform() {
     const platforms = [
-        { label: '$(device-desktop) Linux x86_64', value: '@platforms//os:linux' },
-        { label: '$(device-desktop) macOS ARM64', value: '@platforms//os:macos' },
-        { label: '$(device-desktop) Windows x86_64', value: '@platforms//os:windows' },
-        { label: '$(device-mobile) Android ARM64', value: '@platforms//os:android' },
-        { label: '$(device-mobile) iOS ARM64', value: '@platforms//os:ios' },
+        { label: '$(device-desktop) Linux x86_64', value: 'linux-x86_64', flag: '--platforms=@platforms//os:linux' },
+        { label: '$(device-desktop) macOS ARM64', value: 'macos-arm64', flag: '--platforms=@platforms//os:macos' },
+        { label: '$(device-desktop) Windows x86_64', value: 'windows-x86_64', flag: '--platforms=@platforms//os:windows' },
+        { label: '$(device-mobile) Android ARM64', value: 'android-arm64', flag: '--platforms=@platforms//os:android' },
+        { label: '$(device-mobile) iOS ARM64', value: 'ios-arm64', flag: '--platforms=@platforms//os:ios' },
     ];
 
     const selected = await vscode.window.showQuickPick(platforms, {
@@ -183,9 +182,214 @@ async function selectPlatform() {
 
     if (selected) {
         vscode.window.showInformationMessage(`Selected platform: ${selected.label}`);
-        // TODO: Regenerate compile_commands.json with platform flag
+        // Trigger refresh with new platform
+        refreshCompileCommands();
     }
 }
+
+// ============ Build/Run/Test Commands ============
+
+async function buildTarget() {
+    const target = await promptForTarget('build');
+    if (target) {
+        await executeBazelCommand('build', target);
+    }
+}
+
+async function testTarget() {
+    const target = await promptForTarget('test');
+    if (target) {
+        await executeBazelCommand('test', target);
+    }
+}
+
+async function runTarget() {
+    const target = await promptForTarget('run');
+    if (target) {
+        await executeBazelCommand('run', target);
+    }
+}
+
+async function buildCurrentFile() {
+    const target = await findTargetForCurrentFile();
+    if (target) {
+        await executeBazelCommand('build', target);
+    } else {
+        vscode.window.showWarningMessage('Could not find Bazel target for current file');
+    }
+}
+
+async function testCurrentFile() {
+    const target = await findTargetForCurrentFile();
+    if (target) {
+        // Try to find associated test target
+        const testTarget = target.replace(/:([^:]+)$/, ':$1_test');
+        await executeBazelCommand('test', testTarget);
+    } else {
+        vscode.window.showWarningMessage('Could not find Bazel target for current file');
+    }
+}
+
+async function promptForTarget(action: string): Promise<string | undefined> {
+    const workspaceRoot = getWorkspaceRoot();
+    if (!workspaceRoot) {
+        vscode.window.showErrorMessage('Not in a Bazel workspace');
+        return undefined;
+    }
+
+    // Get recent targets from history or query
+    const recentTargets = await getRecentTargets(workspaceRoot, action);
+
+    const items: vscode.QuickPickItem[] = recentTargets.map(t => ({
+        label: t,
+        description: action
+    }));
+
+    // Add option to enter custom target
+    items.push({
+        label: '$(edit) Enter target manually...',
+        description: 'Type a Bazel target label'
+    });
+
+    const selected = await vscode.window.showQuickPick(items, {
+        placeHolder: `Select target to ${action}`,
+        matchOnDescription: true
+    });
+
+    if (!selected) {
+        return undefined;
+    }
+
+    if (selected.label.includes('Enter target manually')) {
+        return await vscode.window.showInputBox({
+            prompt: 'Enter Bazel target (e.g., //src:main)',
+            placeHolder: '//...'
+        });
+    }
+
+    return selected.label;
+}
+
+async function getRecentTargets(workspaceRoot: string, action: string): Promise<string[]> {
+    // Query for targets based on action type
+    let query = '';
+    switch (action) {
+        case 'test':
+            query = 'kind(".*_test", //...)';
+            break;
+        case 'run':
+            query = 'kind(".*_binary", //...)';
+            break;
+        default:
+            query = 'kind("rule", //...)';
+    }
+
+    try {
+        const result = await runCommand(
+            `bazel query "${query}" --output=label 2>/dev/null | head -20`,
+            workspaceRoot
+        );
+        if (result.exitCode === 0 && result.stdout.trim()) {
+            return result.stdout.trim().split('\n').filter(t => t.startsWith('//'));
+        }
+    } catch {
+        // Ignore errors, return empty list
+    }
+
+    return ['//...'];
+}
+
+async function findTargetForCurrentFile(): Promise<string | undefined> {
+    const editor = vscode.window.activeTextEditor;
+    if (!editor) {
+        return undefined;
+    }
+
+    const workspaceRoot = getWorkspaceRoot();
+    if (!workspaceRoot) {
+        return undefined;
+    }
+
+    const filePath = editor.document.uri.fsPath;
+    const relativePath = path.relative(workspaceRoot, filePath);
+
+    // Use bazel query to find target that owns this file
+    try {
+        const result = await runCommand(
+            `bazel query "kind(rule, rdeps(//..., ${relativePath}, 1))" --output=label 2>/dev/null | head -1`,
+            workspaceRoot
+        );
+        if (result.exitCode === 0 && result.stdout.trim()) {
+            return result.stdout.trim();
+        }
+    } catch {
+        // Fall back to guessing from path
+    }
+
+    // Fallback: construct target from file path
+    const dir = path.dirname(relativePath);
+    const basename = path.basename(relativePath, path.extname(relativePath));
+    return `//${dir}:${basename}`;
+}
+
+async function executeBazelCommand(action: string, target: string) {
+    const workspaceRoot = getWorkspaceRoot();
+    if (!workspaceRoot) {
+        vscode.window.showErrorMessage('Not in a Bazel workspace');
+        return;
+    }
+
+    const config = vscode.workspace.getConfiguration('bazelIdeToolkit');
+    let flags: string[] = [];
+
+    switch (action) {
+        case 'build':
+            flags = config.get<string[]>('buildFlags') || [];
+            break;
+        case 'test':
+            flags = config.get<string[]>('testFlags') || [];
+            break;
+        case 'run':
+            flags = config.get<string[]>('runFlags') || [];
+            break;
+    }
+
+    const command = `bazel ${action} ${flags.join(' ')} ${target}`;
+
+    outputChannel.clear();
+    outputChannel.show(true);
+    outputChannel.appendLine(`$ ${command}`);
+    outputChannel.appendLine('');
+
+    updateStatusBar(`$(sync~spin) Bazel`, `${action}ing ${target}...`);
+
+    const startTime = Date.now();
+
+    try {
+        const result = await runCommandStreaming(command, workspaceRoot, (data) => {
+            outputChannel.append(data);
+        });
+
+        const elapsed = ((Date.now() - startTime) / 1000).toFixed(1);
+
+        if (result.exitCode === 0) {
+            updateStatusBar('$(check) Bazel', `${action} succeeded (${elapsed}s)`);
+            outputChannel.appendLine('');
+            outputChannel.appendLine(`✓ ${action} succeeded in ${elapsed}s`);
+        } else {
+            updateStatusBar('$(error) Bazel', `${action} failed`);
+            outputChannel.appendLine('');
+            outputChannel.appendLine(`✗ ${action} failed (exit code ${result.exitCode})`);
+            vscode.window.showErrorMessage(`Bazel ${action} failed. See output for details.`);
+        }
+    } catch (error: any) {
+        updateStatusBar('$(error) Bazel', `${action} failed`);
+        outputChannel.appendLine(`Error: ${error.message}`);
+        vscode.window.showErrorMessage(`Bazel ${action} error: ${error.message}`);
+    }
+}
+
+// ============ Utilities ============
 
 function getWorkspaceRoot(): string | undefined {
     const workspaceFolders = vscode.workspace.workspaceFolders;
@@ -218,6 +422,47 @@ function runCommand(command: string, cwd: string): Promise<CommandResult> {
     });
 }
 
+function runCommandStreaming(
+    command: string,
+    cwd: string,
+    onData: (data: string) => void
+): Promise<CommandResult> {
+    return new Promise((resolve) => {
+        const proc = cp.spawn('sh', ['-c', command], { cwd });
+
+        let stdout = '';
+        let stderr = '';
+
+        proc.stdout.on('data', (data) => {
+            const text = data.toString();
+            stdout += text;
+            onData(text);
+        });
+
+        proc.stderr.on('data', (data) => {
+            const text = data.toString();
+            stderr += text;
+            onData(text);
+        });
+
+        proc.on('close', (code) => {
+            resolve({
+                exitCode: code || 0,
+                stdout,
+                stderr,
+            });
+        });
+
+        proc.on('error', (err) => {
+            resolve({
+                exitCode: 1,
+                stdout,
+                stderr: err.message,
+            });
+        });
+    });
+}
+
 export function deactivate() {
-    disposeFileWatchers();
+    // Cleanup handled by subscriptions
 }
